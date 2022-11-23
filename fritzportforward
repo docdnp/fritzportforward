@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+
+import traceback
+import sys
+import socket
+import os
+
+import fritzconnection.core.exceptions as exp
+from fritzconnection.cli import utils
+from fritzconnection import FritzConnection
+from fritzconnection.core.fritzconnection import (
+    FRITZ_IP_ADDRESS,
+    FRITZ_TCP_PORT,
+    FRITZ_ENV_USERNAME,
+    FRITZ_ENV_PASSWORD,
+)
+
+def readPortmappings(fc):
+    num = fc.call_action("WANPPPConnection1", "GetPortMappingNumberOfEntries", )
+    portMappings = []
+    numi = num["NewPortMappingNumberOfEntries"]
+    for i in range(numi):
+        portMappings.append(fc.call_action("WANPPPConnection1", "GetGenericPortMappingEntry", NewPortMappingIndex=i))
+    return portMappings
+
+def findPortmapping(fc, extPort, intPort):
+    portmappings = readPortmappings(fc)
+    ip = readMyIP()
+    for m in portmappings: 
+        if m["NewInternalClient"] == ip and m["NewInternalPort"] == intPort and m["NewExternalPort"] == extPort:
+            return m
+    return None
+
+def printMappingHeader():
+    print('{:<20} {:<8} {:<20} {:<20} {:<15} {:<15}   {}\n'.format(
+        'Description', 'Protocol', 'Dest. Host', 'Dest. IP', 'Mapping', 'Lease Duration', 'Status'))
+
+def printMapping(m):
+    desc    = str(m['NewPortMappingDescription']) if m['NewPortMappingDescription'] else '-'
+    proto   = str(m['NewProtocol']) if m['NewProtocol'] else '-'
+    host    = str(m['NewInternalClient']) if m['NewInternalClient'] else '-'
+    extport = str(m['NewExternalPort']) if m['NewExternalPort'] else "?"
+    intport = str(m['NewInternalPort']) if m['NewInternalPort'] else "?"
+    lease   = str(m['NewLeaseDuration']) if m['NewLeaseDuration'] else "infinite"
+    status  = 'active' if m['NewEnabled'] else ''
+    ip      = host
+    mapping = extport + "->" + intport
+    try:
+        host = socket.gethostbyaddr(host)[0]
+    except:
+        pass
+
+    print(f'{desc:<20} {proto:<8} {host:<20} {ip:<20} {mapping:<15} {lease:<15}   {status}')
+
+def listPortmappings(fc):
+    print('Fritz Port Forwardings: \n')
+    printMappingHeader()
+
+    portmappings = readPortmappings(fc)
+    for m in portmappings: printMapping(m)
+    print()
+
+def readMyIP():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    return s.getsockname()[0]
+
+def addPortMapping(fc, extPort, intPort, name=None, protocol='TCP', active=True):
+    mapping = {
+        'NewRemoteHost': '0.0.0.0', 
+        'NewExternalPort': extPort, 
+        'NewProtocol': protocol, 
+        'NewInternalPort': intPort, 
+        'NewInternalClient': readMyIP(), 
+        'NewEnabled': active, 
+        'NewPortMappingDescription': name, 
+        'NewLeaseDuration': 0
+    }
+    fc.call_action("WANPPPConnection1", "AddPortMapping", **mapping )
+
+def deletePortMapping(fc, extPort, intPort, protocol='TCP', name=None):
+    addPortMapping(fc, extPort, intPort, name=name, protocol=protocol, active=False)
+
+def disablePortMapping(args):
+    if not args.mapping:
+        raise Exception("Missing mapping for function --disable (or -D).", 
+                        "Can't disable mappings without --mapping given."
+                        "Need at least the source port.")
+    mapping = str(args.mapping[0]).split(':') if args.mapping else None
+    intPort = int(mapping[1]) if len(mapping) > 1 else None
+    extPort = int(mapping[0])
+
+    fc = utils.get_instance(FritzConnection, args)
+    desc    = str(args.description[0]) if args.description else None
+    if not desc:
+        m = findPortmapping(fc, intPort, extPort)
+        desc = m["NewPortMappingDescription"]
+    deletePortMapping(fc, extPort, intPort, name=desc)
+
+def updatePortMapping(args):
+    if not args.mapping:
+        raise Exception("Missing mapping for function --update (or -u).", 
+                        "Can't update mappings without --mapping given.")
+    mapping = str(args.mapping[0]).split(':') if args.mapping else None
+    if len(mapping) < 2:
+        raise Exception("""Missing either source or destination port of mapping""",
+                        """for function --update (or -u)."""
+                        f""" Got --mapping='{args.mapping}'""")
+    intPort = int(mapping[1])
+    extPort = int(mapping[0])
+
+    fc = utils.get_instance(FritzConnection, args)
+    desc    = str(args.description[0]) if args.description else None
+    if not desc:
+        m = findPortmapping(fc, intPort, extPort)
+        if not m:
+            raise Exception(f"Can't find matching mapping {args.mapping[0]} for your host")
+        desc = m["NewPortMappingDescription"]
+
+    addPortMapping(fc, 
+            extPort, intPort, 
+            name=desc, 
+            protocol=args.protocol,
+            active=not args.disable
+        )
+
+def listAllMappings(args):
+    fc = utils.get_instance(FritzConnection, args)
+    listPortmappings(fc)
+
+def printExceptionArgs(e, prefix="  ", printTrace=False):
+    if printTrace:
+        print(prefix + "Trace:")
+        print(traceback.format_exc())
+        return
+    print(prefix + "Exeption arguments:")
+    for arg in e.args:
+        print((prefix + prefix + prefix).join((prefix + prefix + str(arg)).splitlines(True)))
+
+
+def add_arguments(parser):
+    parser.add_argument('-m', '--mapping',
+                        nargs=1,
+                        help='The basic data of a mapping'
+                             '<external port>:<internal port>')
+    parser.add_argument('-l', '--list',
+                        action='store_true',
+                        help='Prints out a list of the currently defined portmappings.')
+    parser.add_argument('-D', '--disable',
+                        action='store_true',
+                        help="""Disable or add a mapping. Removing one is not supported.
+                                Depends on --mapping and --protocol (default: TCP).""")
+    parser.add_argument('-U', '--update',
+                        action='store_true',
+                        help="""Depends on --mapping and --protocol (default: TCP), but
+                               uses also --name and --disable (where is default: active).""")
+    parser.add_argument('-P', '--protocol',
+                        nargs=1, default="TCP",
+                        help='Either TCP or UDP.')
+    parser.add_argument('-n', '--description',
+                        nargs=1, default="",
+                        help='A description or name of the mapping.')
+    parser.add_argument('--trace-on-error',
+                        action='store_true',
+                        help='Print stack trace on exceptions (for debugging).')
+    parser.description = '''
+    This tool allows you to list and modify portmappings of your FritzBox.
+    But you are limited to add and change only portmappings for the host
+    the script is called from. The reason is the Fritz Box' UPnP interface.
+    Unfortunately you cannot delete mappings.
+    Be aware: If you want to modify a mapping but you provide arguments that
+    don't match an existing mapping, a new one is created.
+    '''
+
+def main():
+    """CLI entry point."""
+    args = utils.get_cli_arguments(add_arguments)
+    
+    extPort = intPort = None
+
+    if args.address == FRITZ_IP_ADDRESS and os.getenv("FRITZ_IP_ADDRESS") is not None:
+        args.address = os.getenv("FRITZ_IP_ADDRESS")
+
+    def executeCommand():
+        if args.list and not (args.update or args.disable):
+            listAllMappings(args)
+        elif   args.update:
+            updatePortMapping(args)
+            if args.list: listAllMappings(args)
+        elif args.disable:
+            disablePortMapping(args)
+            if args.list: listAllMappings(args)
+        else:
+            print("Error: Use --help for more information.")
+            sys.exit(-1)
+
+    try:
+        executeCommand()
+    except KeyboardInterrupt:
+        pass
+    except exp.FritzArgumentValueError as e:
+        try:
+            socket.inet_aton(args.address)
+            print("""An error occured : 
+                       Check arguments for invalid values.""")
+        except socket.error:
+            print("""An error occured: \n"""
+                  f"""  Ensure using a IPv4 Fritz address '{args.address}'. Otherwise FritzBox \n"""
+                   """  assumes you're trying to modify the values of an other host.\n""")
+        printExceptionArgs(e, printTrace=args.trace_on_error)
+    except exp.FritzConnectionException as e:
+        print("""An error occured: \n"""
+              """  Ensure you're using credential of a valid FritzBox user\n"""
+              """  and the correct address and port. Also ensure you don't\n"""
+              """  request mappings conflicting with others.\n""")
+        printExceptionArgs(e, printTrace=args.trace_on_error)
+    except ValueError as v:
+        print("""An error occured: \n"""
+              """  Ensure the values you passed have the correct type.\n""")
+        printExceptionArgs(v, printTrace=args.trace_on_error)
+    except Exception as e:
+        print("""An unknown error occured:\n"""
+              """  Ensure you passed all mandatory and correctly typed values.\n""")
+        printExceptionArgs(e, printTrace=args.trace_on_error)
+        
+
+if __name__ == '__main__':
+    main()
