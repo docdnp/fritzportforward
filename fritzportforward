@@ -27,7 +27,7 @@ def findPortmapping(fc, extPort, intPort):
     portmappings = readPortmappings(fc)
     ip = readMyIP()
     for m in portmappings: 
-        if m["NewInternalClient"] == ip and m["NewInternalPort"] == intPort and m["NewExternalPort"] == extPort:
+        if m["NewInternalClient"] == ip and m["NewInternalPort"] == int(intPort) and m["NewExternalPort"] == int(extPort):
             return m
     return None
 
@@ -94,6 +94,8 @@ def disablePortMapping(args):
     desc    = str(args.description[0]) if args.description else None
     if not desc:
         m = findPortmapping(fc, intPort, extPort)
+        if not m:
+            raise Exception(f"Can't find matching mapping {args.mapping[0]} for your host")
         desc = m["NewPortMappingDescription"]
     deletePortMapping(fc, extPort, intPort, name=desc)
 
@@ -114,7 +116,7 @@ def updatePortMapping(args):
     if not desc:
         m = findPortmapping(fc, intPort, extPort)
         if not m:
-            raise Exception(f"Can't find matching mapping {args.mapping[0]} for your host")
+            raise Exception(f"Can't find matching mapping {args.mapping[0]} for your host: " + readMyIP())
         desc = m["NewPortMappingDescription"]
 
     addPortMapping(fc, 
@@ -208,20 +210,24 @@ def main():
                   f"""  Ensure using a IPv4 Fritz address '{args.address}'. Otherwise FritzBox \n"""
                    """  assumes you're trying to modify the values of an other host.\n""")
         printExceptionArgs(e, printTrace=args.trace_on_error)
+        sys.exit(1)
     except exp.FritzConnectionException as e:
         print("""An error occured: \n"""
               """  Ensure you're using credential of a valid FritzBox user\n"""
               """  and the correct address and port. Also ensure you don't\n"""
               """  request mappings conflicting with others.\n""")
         printExceptionArgs(e, printTrace=args.trace_on_error)
+        sys.exit(1)
     except ValueError as v:
         print("""An error occured: \n"""
               """  Ensure the values you passed have the correct type.\n""")
         printExceptionArgs(v, printTrace=args.trace_on_error)
+        sys.exit(1)
     except Exception as e:
         print("""An unknown error occured:\n"""
               """  Ensure you passed all mandatory and correctly typed values.\n""")
         printExceptionArgs(e, printTrace=args.trace_on_error)
+        sys.exit(1)
         
 
 if __name__ == '__main__':
