@@ -55,6 +55,35 @@ optional arguments:
 
 ``` 
 
+## Installation
+To install the tool on your system call `./install.sh`. 
+As root all files will be placed under `/usr/local/(bin|share)`. As user under `~/.local/(bin/share)`.
+
+The following tools will be available in your installation bin directory:
+```
+fritzcall
+fritzconnection
+fritzhomeauto
+fritzhosts
+fritzmonitor
+fritzphonebook
+fritzportforward
+fritzstatus
+fritztools
+fritzwlan
+```
+
+The app `fritztools` allows some simple admin tasks, like:
+```
+Usage: fritztools [Options]
+   --uninstall          Uninstall the fritztools
+   -y                   Answer with 'yes' to uninstall
+   --config             Setup configuration for connecting to FritzBox
+   --bash-completion    Provides functions for bash completion. 
+                        Do: eval "$(fritztools --bash-completion)"
+```
+
+
 ## Examples:
 You can either specify the FritzBox, your user and your password using the CLI arguments or by setting the following environment variables:
 ```
