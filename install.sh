@@ -105,6 +105,7 @@ PYTHONPATH=$PYPATH/site-packages $VENV/bin/$tool \$FRITZBOX_ADDRESS \$FRITZBOX_U
 EOF
 chmod +x $BINDIR/$tool
 done
+mk_fritztools fritztools
 return 0
 }
 
